@@ -103,16 +103,16 @@
             margin-bottom: 10px;
             text-align: left;
         }
-        /* スピード調整関連のCSS */
-        .speed-control {
+        .speed-control, .voice-control {
             margin-top: 15px;
             display: flex;
             align-items: center;
             gap: 10px;
         }
-        .speed-control label {
+        .speed-control label, .voice-control label {
             font-weight: bold;
             color: #495057;
+            white-space: nowrap; /* ラベルが折り返さないように */
         }
         .speed-control input[type="range"] {
             flex-grow: 1;
@@ -151,6 +151,15 @@
             font-weight: bold;
             color: #007bff;
         }
+        .voice-control select {
+            flex-grow: 1;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-size: 1em;
+            background-color: #f8f8f8;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -179,6 +188,11 @@
                 <input type="range" id="speechSpeed" min="0.5" max="2.0" value="1.0" step="0.1">
                 <span id="currentSpeed" class="speed-value">1.0x</span>
             </div>
+
+            <div class="voice-control">
+                <label for="voiceSelect">音声選択:</label>
+                <select id="voiceSelect"></select>
+            </div>
         </div>
     </div>
 
@@ -189,6 +203,7 @@
         const playKoreanVoiceBtn = document.getElementById('playKoreanVoice');
         const speechSpeedSlider = document.getElementById('speechSpeed');
         const currentSpeedDisplay = document.getElementById('currentSpeed');
+        const voiceSelect = document.getElementById('voiceSelect');
         const statusMessage = document.getElementById('statusMessage');
 
         // 音声再生速度の初期設定
@@ -200,6 +215,68 @@
             currentSpeechRate = parseFloat(speechSpeedSlider.value);
             currentSpeedDisplay.textContent = `${currentSpeechRate.toFixed(1)}x`;
         });
+
+        // --- 音声リストの初期化と更新 ---
+        let voices = []; // 利用可能な音声リストを保持
+
+        // 音声リストをドロップダウンに設定する関数
+        function populateVoiceList() {
+            voices = speechSynthesis.getVoices();
+            voiceSelect.innerHTML = ''; // ドロップダウンをクリア
+
+            let defaultSelectedVoiceName = ''; // デフォルトで選択したい音声名（女性優先）
+
+            // 利用可能な韓国語の音声を見つけ、ドロップダウンに追加
+            const koreanVoices = voices.filter(voice => voice.lang === 'ko-KR');
+
+            // まず女性の音声を優先してデフォルトに設定
+            const femaleVoice = koreanVoices.find(voice => 
+                voice.name.toLowerCase().includes('female') || 
+                voice.name.toLowerCase().includes('woman') || 
+                voice.name.toLowerCase().includes('yuna') || // ユナという名前も女性と仮定
+                voice.name.toLowerCase().includes('google 한국의') // Google 韓国の音声名に含まれることが多い
+            );
+            if (femaleVoice) {
+                defaultSelectedVoiceName = femaleVoice.name;
+            } else if (koreanVoices.length > 0) {
+                // 女性音声が見つからなければ、最初の韓国語音声をデフォルトに
+                defaultSelectedVoiceName = koreanVoices[0].name;
+            }
+            
+            // ドロップダウンにオプションを追加
+            koreanVoices.forEach((voice) => {
+                const option = document.createElement('option');
+                option.textContent = voice.name + ' (' + voice.lang + ')';
+                option.value = voice.name;
+                voiceSelect.appendChild(option);
+
+                if (voice.name === defaultSelectedVoiceName) {
+                    option.selected = true;
+                }
+            });
+
+            // もし、どの韓国語音声も選択肢に追加されなかった場合
+            if (voiceSelect.options.length === 0) {
+                const option = document.createElement('option');
+                option.textContent = '利用可能な韓国語音声はありません';
+                option.value = '';
+                voiceSelect.appendChild(option);
+                voiceSelect.disabled = true; // ドロップダウンを無効化
+                playKoreanVoiceBtn.disabled = true; // 再生ボタンも無効化
+                statusMessage.textContent = 'デバイスに韓国語音声がインストールされていません。';
+            } else {
+                 voiceSelect.disabled = false;
+                 playKoreanVoiceBtn.disabled = false;
+                 statusMessage.textContent = '利用可能な音声が読み込まれました。';
+            }
+        }
+
+        // 音声リストの変更イベントをリッスン
+        if (speechSynthesis.onvoiceschanged !== undefined) {
+            speechSynthesis.onvoiceschanged = populateVoiceList;
+            // ページロード時に既に音声が利用可能な場合があるため、初回も呼び出す
+            populateVoiceList(); 
+        }
 
         // --- 1. 日本語 音声入力 (Web Speech API - SpeechRecognition) ---
         let recognition;
@@ -323,8 +400,6 @@
         });
 
         // --- 4. 韓国語 音声出力 (Web Speech API - SpeechSynthesis) ---
-        // utterance変数のスコープを、playKoreanVoiceBtnのclickイベント内で生成するように変更
-        // これにより、クリックごとに新しいutteranceオブジェクトが作成され、最新のrateが適用される
         if ('SpeechSynthesisUtterance' in window && 'speechSynthesis' in window) {
             playKoreanVoiceBtn.addEventListener('click', () => {
                 const textToSpeak = koreanTranslationOutput.textContent;
@@ -335,20 +410,26 @@
                     !textToSpeak.includes('エラー') &&
                     !textToSpeak.includes('入力がありません')) {
                     
-                    // 既存の再生を停止 (重要: これにより新しい設定が適用されやすくなる)
                     speechSynthesis.cancel(); 
 
-                    const utterance = new SpeechSynthesisUtterance(textToSpeak); // ここで新しいutteranceを生成
+                    const utterance = new SpeechSynthesisUtterance(textToSpeak);
                     utterance.lang = 'ko-KR'; 
-                    utterance.rate = currentSpeechRate; // ここで現在の速度を確実に設定
+                    utterance.rate = currentSpeechRate; 
                     
-                    const voices = speechSynthesis.getVoices();
-                    const koreanVoice = voices.find(voice => voice.lang === 'ko-KR');
-                    if (koreanVoice) {
-                        utterance.voice = koreanVoice;
+                    let selectedVoice = null;
+                    const selectedVoiceName = voiceSelect.value; // ドロップダウンで選択された音声名
+
+                    // ドロップダウンで選択された音声があれば、それを設定
+                    if (selectedVoiceName) {
+                        selectedVoice = voices.find(voice => voice.name === selectedVoiceName);
+                    }
+
+                    if (selectedVoice) {
+                        utterance.voice = selectedVoice;
+                        console.log("Selected Voice:", selectedVoice.name, selectedVoice.lang);
                     } else {
-                        console.warn("韓国語の音声が見つかりません。デフォルトの音声を使用します。");
-                        statusMessage.textContent = "韓国語音声が見つかりません（ブラウザ依存）。";
+                        console.warn("利用可能な韓国語の音声が見つかりません。");
+                        statusMessage.textContent = "利用可能な韓国語音声がありません。";
                     }
 
                     speechSynthesis.speak(utterance);
@@ -367,13 +448,14 @@
         } else {
             playKoreanVoiceBtn.disabled = true;
             playKoreanVoiceBtn.textContent = '音声出力はサポートされていません';
+            voiceSelect.disabled = true; // 音声選択も無効化
             statusMessage.textContent = '音声出力はサポートされていません。';
             console.warn('Web Speech API (SpeechSynthesis) not supported in this browser.');
         }
 
         // 初回表示時の初期値 (動作確認用)
-        japaneseInput.value = "";
-        translateAndDisplay(japaneseInput.value);
+        // japaneseInput.value = "引き継ぎをお願いします";
+        // translateAndDisplay(japaneseInput.value);
     </script>
 </body>
 </html>
